@@ -78,6 +78,21 @@ bool CameraComm::deleteFile(const char* filename) {
     return response.startsWith(RESP_OK);
 }
 
+bool CameraComm::syncPin(const char* secret, const char* pin) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "%s%s:%s", CMD_SYNC_PIN, secret, pin);
+    String response = sendCommand(cmd);
+    bool success = response.startsWith(RESP_OK);
+
+    if (success) {
+        Serial.printf("CameraComm: PIN synced to camera: %s\n", pin);
+    } else {
+        Serial.println("CameraComm: PIN sync failed (wrong secret?)");
+    }
+
+    return success;
+}
+
 CameraStatus CameraComm::getStatus() {
     String response = sendCommand(CMD_GET_STATUS, 2000);
 

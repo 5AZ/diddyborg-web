@@ -92,6 +92,21 @@
 #define EPO_IGNORE              false   // Set true if you don't have an EPO switch
 
 // ============================================
+// SECURITY SETTINGS
+// ============================================
+
+// Web UI access PIN (6-8 digits, user-changeable via UI)
+#define DEFAULT_ACCESS_PIN      "123456"    // Change this default!
+
+// Shared secret for device pairing (MUST match on both boards)
+// Change this to a random string for your robot
+// This prevents unauthorized devices from impersonating your camera
+#define DEVICE_SHARED_SECRET    "DiddyBorg2024-SecretKey-ChangeMe!"
+
+// Session timeout (seconds) - how long before re-entering PIN
+#define SESSION_TIMEOUT_SECONDS 3600        // 1 hour
+
+// ============================================
 // DEBUG SETTINGS
 // ============================================
 

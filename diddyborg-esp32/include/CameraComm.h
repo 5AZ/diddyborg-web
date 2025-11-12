@@ -24,6 +24,7 @@
 #define CMD_DELETE_FILE     "DELETE:"    // Followed by filename
 #define CMD_SET_SETTING     "SET:"       // Followed by key=value
 #define CMD_GET_SETTING     "GET:"       // Followed by key
+#define CMD_SYNC_PIN        "SYNC_PIN:"  // Followed by secret:pin
 
 // Responses FROM camera board
 #define RESP_PONG           "PONG"
@@ -64,6 +65,7 @@ public:
     bool setSetting(const char* key, const char* value);
     String getSetting(const char* key);
     bool deleteFile(const char* filename);
+    bool syncPin(const char* secret, const char* pin);
 
     // Get status
     CameraStatus getStatus();

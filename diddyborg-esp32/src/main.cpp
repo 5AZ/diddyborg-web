@@ -12,11 +12,13 @@
 #include <Wire.h>
 #include <Bluepad32.h>
 #include <Preferences.h>
+#include "Config.h"
 #include "PicoBorgRev.h"
 #include "DriveController.h"
 #include "FlyskyInput.h"
 #include "CameraComm.h"
 #include "WebServer.h"
+#include "WebAuth.h"
 
 // Pin Configuration
 #define I2C_SDA_PIN         21
@@ -38,6 +40,7 @@ PicoBorgRev motorController;
 DriveController* driveController = nullptr;
 FlyskyInput flyskyInput;
 CameraComm cameraComm;
+WebAuth webAuth;
 DiddyWebServer* webServer = nullptr;
 Preferences preferences;
 
@@ -347,9 +350,14 @@ void setup() {
         Serial.println("Camera board not detected (will retry in background)");
     }
 
+    // Initialize authentication
+    Serial.println("Initializing authentication...");
+    webAuth.begin(DEFAULT_ACCESS_PIN);
+    Serial.printf("Default PIN: %s (change this immediately!)\n", DEFAULT_ACCESS_PIN);
+
     // Start web server
     Serial.println("Starting web interface...");
-    webServer = new DiddyWebServer(driveController, &cameraComm);
+    webServer = new DiddyWebServer(driveController, &cameraComm, &webAuth);
     if (webServer->begin()) {
         Serial.printf("Web UI: http://%s\n", webServer->getIPAddress().c_str());
     }

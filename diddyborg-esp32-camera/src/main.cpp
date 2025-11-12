@@ -15,10 +15,14 @@
 #include <FS.h>
 #include <SD_MMC.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 // ===========================================
 // CONFIGURATION
 // ===========================================
+
+// Shared secret for device pairing (MUST match motor controller)
+#define DEVICE_SHARED_SECRET    "DiddyBorg2024-SecretKey-ChangeMe!"
 
 // WiFi settings (join same network as motor controller)
 #define WIFI_SSID       "DiddyBorg"
@@ -62,10 +66,12 @@
 
 AsyncWebServer server(STREAM_PORT);
 HardwareSerial SerialUART(1);
+Preferences preferences;
 
 bool cameraInitialized = false;
 bool sdCardAvailable = false;
 bool recording = false;
+String syncedPIN = "";
 
 File recordingFile;
 unsigned long recordingStartTime = 0;
@@ -480,6 +486,39 @@ void handleUARTCommand(String command) {
             SerialUART.println("ERROR");
         }
     }
+    else if (command.startsWith("SYNC_PIN:")) {
+        // Format: SYNC_PIN:secret:pin
+        String payload = command.substring(9);
+        int colonPos = payload.indexOf(':');
+
+        if (colonPos > 0) {
+            String receivedSecret = payload.substring(0, colonPos);
+            String newPin = payload.substring(colonPos + 1);
+
+            // Verify shared secret
+            if (receivedSecret == DEVICE_SHARED_SECRET) {
+                // Validate PIN (6-8 digits)
+                if (newPin.length() >= 6 && newPin.length() <= 8) {
+                    // Store PIN
+                    syncedPIN = newPin;
+                    preferences.begin("camera", false);
+                    preferences.putString("pin", newPin);
+                    preferences.end();
+
+                    Serial.printf("PIN synced: %s\n", newPin.c_str());
+                    SerialUART.println("OK");
+                } else {
+                    Serial.println("PIN sync failed: invalid PIN format");
+                    SerialUART.println("ERROR");
+                }
+            } else {
+                Serial.println("PIN sync failed: invalid secret");
+                SerialUART.println("ERROR");
+            }
+        } else {
+            SerialUART.println("ERROR");
+        }
+    }
     else {
         SerialUART.println("ERROR");
     }
@@ -510,6 +549,14 @@ void setup() {
     Serial.println("\n======================================");
     Serial.println("  DiddyBorg ESP32-S3 Camera Board");
     Serial.println("======================================\n");
+
+    // Load synced PIN if exists
+    preferences.begin("camera", true);
+    syncedPIN = preferences.getString("pin", "");
+    preferences.end();
+    if (syncedPIN.length() > 0) {
+        Serial.println("Synced PIN loaded from memory");
+    }
 
     // Initialize UART
     SerialUART.begin(UART_BAUD, SERIAL_8N1, UART_RX, UART_TX);

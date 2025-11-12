@@ -5,11 +5,13 @@
  */
 
 #include "WebServer.h"
+#include "Config.h"
 #include <ArduinoJson.h>
 
-DiddyWebServer::DiddyWebServer(DriveController* drive, CameraComm* camera) {
+DiddyWebServer::DiddyWebServer(DriveController* drive, CameraComm* camera, WebAuth* auth) {
     _drive = drive;
     _camera = camera;
+    _auth = auth;
     _server = nullptr;
     _running = false;
 }
@@ -29,20 +31,50 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
     // Create server
     _server = new AsyncWebServer(80);
 
-    // Route handlers
+    // Public routes (no authentication required)
+    _server->on("/login", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleLogin(req);
+    });
+
+    _server->on("/login", HTTP_POST, [this](AsyncWebServerRequest* req) {}, nullptr,
+        [this](AsyncWebServerRequest* req, uint8_t *data, size_t len, size_t index, size_t total) {
+            this->handleLoginPost(req);
+        });
+
+    _server->on("/logout", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        this->handleLogout(req);
+    });
+
+    // Protected routes (authentication required)
     _server->on("/", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->redirect("/login");
+            return;
+        }
         this->handleRoot(req);
     });
 
     _server->on("/api/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         this->handleAPI(req);
     });
 
     _server->on("/api/camera/status", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         this->handleCameraAPI(req);
     });
 
     _server->on("/api/camera/record", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         bool start = req->hasParam("start");
         if (_camera) {
             if (start) {
@@ -55,18 +87,34 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
     });
 
     _server->on("/api/camera/files", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         this->handleFileList(req);
     });
 
     _server->on("/api/camera/download", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         this->handleFileDownload(req);
     });
 
     _server->on("/api/camera/delete", HTTP_DELETE, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         this->handleFileDelete(req);
     });
 
     _server->on("/api/camera/setting", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         if (req->hasParam("key") && req->hasParam("value") && _camera) {
             String key = req->getParam("key")->value();
             String value = req->getParam("value")->value();
@@ -76,6 +124,10 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
     });
 
     _server->on("/api/config", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        if (!this->isAuthenticated(req)) {
+            req->send(401, "text/plain", "Unauthorized");
+            return;
+        }
         if (req->hasParam("speed_limit")) {
             float limit = req->getParam("speed_limit")->value().toFloat();
             _drive->setSpeedLimit(limit);
@@ -85,6 +137,10 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
             _drive->setDeadzone(dz);
         }
         req->send(200, "text/plain", "OK");
+    });
+
+    _server->on("/api/changepin", HTTP_POST, [this](AsyncWebServerRequest* req) {
+        this->handleChangePinPost(req);
     });
 
     // Start server
@@ -98,12 +154,132 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
 }
 
 void DiddyWebServer::update() {
-    // Server runs asynchronously, nothing needed here
+    // Server runs asynchronously, but cleanup expired sessions
+    static unsigned long lastCleanup = 0;
+    if (millis() - lastCleanup > 60000) {  // Every minute
+        lastCleanup = millis();
+        if (_auth) {
+            _auth->cleanupSessions();
+        }
+    }
 }
 
 String DiddyWebServer::getIPAddress() {
     return WiFi.softAPIP().toString();
 }
+
+// Authentication helpers
+
+bool DiddyWebServer::isAuthenticated(AsyncWebServerRequest* request) {
+    if (!_auth) return true;  // No auth system
+
+    String token = getSessionCookie(request);
+    return _auth->verifySessionToken(token.c_str());
+}
+
+String DiddyWebServer::getSessionCookie(AsyncWebServerRequest* request) {
+    if (!request->hasHeader("Cookie")) {
+        return "";
+    }
+
+    String cookies = request->header("Cookie");
+    int sessionStart = cookies.indexOf("session=");
+    if (sessionStart == -1) {
+        return "";
+    }
+
+    sessionStart += 8;  // Length of "session="
+    int sessionEnd = cookies.indexOf(';', sessionStart);
+    if (sessionEnd == -1) {
+        sessionEnd = cookies.length();
+    }
+
+    return cookies.substring(sessionStart, sessionEnd);
+}
+
+// Authentication page handlers
+
+void DiddyWebServer::handleLogin(AsyncWebServerRequest* request) {
+    request->send(200, "text/html", generateLoginHTML());
+}
+
+void DiddyWebServer::handleLoginPost(AsyncWebServerRequest* request) {
+    if (!_auth) {
+        request->send(500, "text/plain", "Auth not initialized");
+        return;
+    }
+
+    if (!request->hasParam("pin", true)) {
+        request->send(400, "text/plain", "Missing PIN");
+        return;
+    }
+
+    String pin = request->getParam("pin", true)->value();
+
+    if (_auth->verifyPin(pin.c_str())) {
+        // Generate session token
+        String token = _auth->generateSessionToken();
+
+        // Set cookie and redirect
+        AsyncWebServerResponse* response = request->beginResponse(302);
+        response->addHeader("Location", "/");
+        response->addHeader("Set-Cookie", "session=" + token + "; Path=/; Max-Age=3600");
+        request->send(response);
+
+        Serial.printf("WebAuth: Successful login, session: %s\n", token.c_str());
+    } else {
+        // Invalid PIN
+        request->send(401, "text/plain", "Invalid PIN");
+        Serial.println("WebAuth: Failed login attempt");
+    }
+}
+
+void DiddyWebServer::handleLogout(AsyncWebServerRequest* request) {
+    if (_auth) {
+        String token = getSessionCookie(request);
+        if (token.length() > 0) {
+            _auth->invalidateSession(token.c_str());
+        }
+    }
+
+    // Clear cookie and redirect to login
+    AsyncWebServerResponse* response = request->beginResponse(302);
+    response->addHeader("Location", "/login");
+    response->addHeader("Set-Cookie", "session=; Path=/; Max-Age=0");
+    request->send(response);
+}
+
+void DiddyWebServer::handleChangePinPost(AsyncWebServerRequest* request) {
+    if (!isAuthenticated(request)) {
+        request->send(401, "text/plain", "Unauthorized");
+        return;
+    }
+
+    if (!_auth) {
+        request->send(500, "text/plain", "Auth not initialized");
+        return;
+    }
+
+    if (!request->hasParam("old_pin", true) || !request->hasParam("new_pin", true)) {
+        request->send(400, "text/plain", "Missing parameters");
+        return;
+    }
+
+    String oldPin = request->getParam("old_pin", true)->value();
+    String newPin = request->getParam("new_pin", true)->value();
+
+    if (_auth->changePin(oldPin.c_str(), newPin.c_str())) {
+        // Sync to camera board
+        if (_camera) {
+            _camera->syncPin(DEVICE_SHARED_SECRET, newPin.c_str());
+        }
+        request->send(200, "text/plain", "PIN changed successfully");
+    } else {
+        request->send(400, "text/plain", "Failed to change PIN");
+    }
+}
+
+// Page handlers
 
 void DiddyWebServer::handleRoot(AsyncWebServerRequest* request) {
     request->send(200, "text/html", generateHTML());
@@ -186,6 +362,147 @@ String DiddyWebServer::generateCameraStatusJSON() {
     String json;
     serializeJson(doc, json);
     return json;
+}
+
+String DiddyWebServer::generateLoginHTML() {
+    String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DiddyBorg - Login</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .login-container {
+            background: white;
+            border-radius: 15px;
+            padding: 40px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            max-width: 400px;
+            width: 100%;
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 2em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 0.9em;
+        }
+        .pin-input {
+            width: 100%;
+            padding: 15px;
+            font-size: 1.5em;
+            text-align: center;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            letter-spacing: 0.5em;
+        }
+        .pin-input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        .btn-login {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1.2em;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        .btn-login:hover {
+            opacity: 0.9;
+        }
+        .error {
+            color: #f44336;
+            text-align: center;
+            margin-top: 15px;
+            display: none;
+        }
+        .robot-icon {
+            text-align: center;
+            font-size: 4em;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="robot-icon">🤖</div>
+        <h1>DiddyBorg</h1>
+        <div class="subtitle">Enter PIN to continue</div>
+        <form id="loginForm" onsubmit="return handleLogin(event)">
+            <input type="password"
+                   id="pinInput"
+                   class="pin-input"
+                   placeholder="••••••"
+                   maxlength="8"
+                   pattern="[0-9]{6,8}"
+                   required
+                   autofocus>
+            <button type="submit" class="btn-login">Unlock</button>
+        </form>
+        <div id="error" class="error">Invalid PIN. Please try again.</div>
+    </div>
+
+    <script>
+        function handleLogin(event) {
+            event.preventDefault();
+
+            const pin = document.getElementById('pinInput').value;
+            const errorDiv = document.getElementById('error');
+
+            fetch('/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'pin=' + pin
+            })
+            .then(response => {
+                if (response.ok || response.status === 302) {
+                    // Success - redirect handled by server
+                    window.location.href = '/';
+                } else {
+                    // Failed
+                    errorDiv.style.display = 'block';
+                    document.getElementById('pinInput').value = '';
+                    document.getElementById('pinInput').focus();
+
+                    setTimeout(() => {
+                        errorDiv.style.display = 'none';
+                    }, 3000);
+                }
+            })
+            .catch(error => {
+                errorDiv.textContent = 'Connection error';
+                errorDiv.style.display = 'block';
+            });
+
+            return false;
+        }
+    </script>
+</body>
+</html>
+)rawliteral";
+
+    return html;
 }
 
 String DiddyWebServer::generateHTML() {
@@ -304,7 +621,13 @@ String DiddyWebServer::generateHTML() {
 </head>
 <body>
     <div class="container">
-        <h1>🤖 DiddyBorg Control Panel</h1>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+            <h1 style="margin: 0;">🤖 DiddyBorg Control Panel</h1>
+            <div>
+                <button onclick="showChangePinDialog()" class="btn" style="margin-right: 10px;">Change PIN</button>
+                <a href="/logout" class="btn btn-danger">Logout</a>
+            </div>
+        </div>
 
         <!-- Robot Status -->
         <div class="section">
@@ -516,6 +839,38 @@ String DiddyWebServer::generateHTML() {
                 fetch('/api/camera/delete?file=' + filename, {method: 'DELETE'})
                     .then(() => refreshFiles());
             }
+        }
+
+        function showChangePinDialog() {
+            const oldPin = prompt('Enter current PIN:');
+            if (!oldPin) return;
+
+            const newPin = prompt('Enter new PIN (6-8 digits):');
+            if (!newPin || newPin.length < 6 || newPin.length > 8) {
+                alert('PIN must be 6-8 digits');
+                return;
+            }
+
+            const confirmPin = prompt('Confirm new PIN:');
+            if (newPin !== confirmPin) {
+                alert('PINs do not match');
+                return;
+            }
+
+            fetch('/api/changepin', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'old_pin=' + oldPin + '&new_pin=' + newPin
+            })
+            .then(r => r.text())
+            .then(msg => {
+                alert(msg);
+                if (msg.includes('successfully')) {
+                    // PIN changed, redirect to login
+                    window.location.href = '/logout';
+                }
+            })
+            .catch(err => alert('Error changing PIN'));
         }
 
         // Update every 2 seconds
