@@ -15,6 +15,8 @@
 #include "PicoBorgRev.h"
 #include "DriveController.h"
 #include "FlyskyInput.h"
+#include "CameraComm.h"
+#include "WebServer.h"
 
 // Pin Configuration
 #define I2C_SDA_PIN         21
@@ -35,6 +37,8 @@ enum InputMode {
 PicoBorgRev motorController;
 DriveController* driveController = nullptr;
 FlyskyInput flyskyInput;
+CameraComm cameraComm;
+DiddyWebServer* webServer = nullptr;
 Preferences preferences;
 
 // State variables
@@ -335,6 +339,21 @@ void setup() {
     setupBluePad32();
     setupFlysky();
 
+    // Initialize camera communication
+    Serial.println("Initializing camera communication...");
+    if (cameraComm.begin()) {
+        Serial.println("Camera board connected!");
+    } else {
+        Serial.println("Camera board not detected (will retry in background)");
+    }
+
+    // Start web server
+    Serial.println("Starting web interface...");
+    webServer = new DiddyWebServer(driveController, &cameraComm);
+    if (webServer->begin()) {
+        Serial.printf("Web UI: http://%s\n", webServer->getIPAddress().c_str());
+    }
+
     Serial.println("\n=== System Ready ===");
     Serial.println("Waiting for input source...\n");
 
@@ -369,6 +388,14 @@ void loop() {
 
     // Update drive controller (for ramping)
     driveController->update();
+
+    // Update camera communication
+    cameraComm.update();
+
+    // Update web server
+    if (webServer) {
+        webServer->update();
+    }
 
     // Update status indicators
     updateStatusLED();
