@@ -11,8 +11,10 @@
 #include <HardwareSerial.h>
 
 // UART pins for camera communication
-#define CAMERA_UART_TX      17
-#define CAMERA_UART_RX      18
+// Changed from 17/18 to avoid conflict with camera data pins (CAM_PIN_D1/D2)
+// TX connects to camera's RX (GPIO3), RX connects to camera's TX (GPIO1)
+#define CAMERA_UART_TX      3   // Motor TX -> Camera RX
+#define CAMERA_UART_RX      1   // Motor RX -> Camera TX
 #define CAMERA_UART_BAUD    115200
 
 // Commands sent TO camera board

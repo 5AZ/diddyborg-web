@@ -25,7 +25,8 @@ public:
     // High-level control methods
     void setDrive(float left, float right);  // Direct left/right control (-1.0 to 1.0)
     void setArcadeDrive(float throttle, float steering);  // Arcade style control
-    void stop();
+    void stop();         // Immediate stop (emergency)
+    void gentleStop();   // Ramped stop (protects motor gears)
 
     // Configuration
     void setDriveMode(DriveMode mode) { _driveMode = mode; }

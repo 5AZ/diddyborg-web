@@ -6,6 +6,7 @@
 
 #include "WebServer.h"
 #include "Config.h"
+#include "DebugLog.h"
 #include <ArduinoJson.h>
 
 DiddyWebServer::DiddyWebServer(DriveController* drive, CameraComm* camera, WebAuth* auth) {
@@ -141,6 +142,16 @@ bool DiddyWebServer::begin(const char* ssid, const char* password) {
 
     _server->on("/api/changepin", HTTP_POST, [this](AsyncWebServerRequest* req) {
         this->handleChangePinPost(req);
+    });
+
+    // Debug log route (requires authentication)
+    _server->on("/api/debuglog", HTTP_GET, [this](AsyncWebServerRequest* req) {
+        if (!isAuthenticated(req)) {
+            req->redirect("/login");
+            return;
+        }
+        String log = debugLog.getAll();
+        req->send(200, "text/plain", log);
     });
 
     // Start server
@@ -729,6 +740,14 @@ String DiddyWebServer::generateHTML() {
                 </div>
             </div>
         </div>
+
+        <!-- Debug Log -->
+        <div class="section">
+            <h2>System Debug Log</h2>
+            <button onclick="refreshDebugLog()" class="btn" style="margin-bottom:10px;">Refresh Log</button>
+            <button onclick="clearDebugLog()" class="btn btn-danger" style="margin-bottom:10px; margin-left:10px;">Clear Log</button>
+            <pre id="debugLog" style="background:#000; color:#0f0; padding:15px; border-radius:8px; max-height:400px; overflow-y:auto; font-family:monospace; font-size:12px; white-space:pre-wrap;">Loading...</pre>
+        </div>
     </div>
 
     <script>
@@ -873,9 +892,29 @@ String DiddyWebServer::generateHTML() {
             .catch(err => alert('Error changing PIN'));
         }
 
+        function refreshDebugLog() {
+            fetch('/api/debuglog')
+                .then(r => r.text())
+                .then(log => {
+                    const logEl = document.getElementById('debugLog');
+                    logEl.textContent = log;
+                    // Auto-scroll to bottom
+                    logEl.scrollTop = logEl.scrollHeight;
+                });
+        }
+
+        function clearDebugLog() {
+            if (confirm('Clear all debug log entries?')) {
+                // Note: Would need server endpoint to clear - for now just refresh
+                alert('Clear log not implemented yet');
+            }
+        }
+
         // Update every 2 seconds
         setInterval(updateStatus, 2000);
         updateStatus();
+        refreshDebugLog();  // Load debug log on page load
+        setInterval(refreshDebugLog, 5000);  // Auto-refresh every 5 seconds
     </script>
 </body>
 </html>

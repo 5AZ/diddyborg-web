@@ -19,13 +19,7 @@
 #include "CameraComm.h"
 #include "WebServer.h"
 #include "WebAuth.h"
-
-// Pin Configuration
-#define I2C_SDA_PIN         21
-#define I2C_SCL_PIN         22
-#define FLYSKY_PPM_PIN      19
-#define STATUS_LED_PIN      2
-#define CONFIG_BUTTON_PIN   0  // Boot button
+#include "DebugLog.h"
 
 // Input modes
 enum InputMode {
@@ -63,16 +57,18 @@ void onConnectedGamepad(GamepadPtr gp) {
                   gp->getModelName().c_str(),
                   gp->getVendorId(),
                   gp->getProductId());
+    debugLog.logf("Gamepad connected: %s", gp->getModelName().c_str());
 }
 
 void onDisconnectedGamepad(GamepadPtr gp) {
     myGamepad = nullptr;
     gamepadConnected = false;
     Serial.println("Gamepad disconnected!");
+    debugLog.log("Gamepad disconnected - stopping motors");
 
-    // Stop motors on disconnect
+    // Gracefully stop motors on disconnect (protects motor gears)
     if (driveController) {
-        driveController->stop();
+        driveController->gentleStop();
     }
 }
 
@@ -88,12 +84,14 @@ void setupMotorController() {
 
     if (motorController.begin(Wire)) {
         Serial.println("Motor controller ready!");
+        debugLog.log("PicoBorgRev motor controller initialized OK");
         driveController = new DriveController(&motorController);
         driveController->setSpeedLimit(0.7f);  // Start at 70% for safety
         driveController->setDeadzone(0.15f);
         driveController->setRamping(true);
     } else {
         Serial.println("FATAL: Motor controller not found!");
+        debugLog.log("ERROR: Motor controller not found on I2C bus!");
         while (1) {
             digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
             delay(100);  // Fast blink error
@@ -195,22 +193,25 @@ void updateInputMode() {
         switch (currentMode) {
             case INPUT_MODE_GAMEPAD:
                 Serial.println("GAMEPAD");
+                debugLog.log("Input mode: GAMEPAD active");
                 break;
             case INPUT_MODE_FLYSKY:
                 Serial.println("FLYSKY");
+                debugLog.log("Input mode: FLYSKY RC active");
                 break;
             case INPUT_MODE_NONE:
                 Serial.println("NONE");
-                driveController->stop();
+                debugLog.log("Input mode: NONE - stopping motors");
+                driveController->gentleStop();
                 break;
             default:
                 break;
         }
     }
 
-    // Stop motors if no input
+    // Gracefully stop motors if no input (protects motor gears)
     if (currentMode == INPUT_MODE_NONE && previousMode != INPUT_MODE_NONE) {
-        driveController->stop();
+        driveController->gentleStop();
     }
 }
 
@@ -329,6 +330,10 @@ void setup() {
     Serial.println("  DiddyBorg ESP32-S3 Controller  ");
     Serial.println("=================================\n");
 
+    // Initialize debug log first
+    debugLog.log("=== SYSTEM BOOT ===");
+    debugLog.log("DiddyBorg ESP32-S3 Controller starting");
+
     // Initialize hardware
     pinMode(STATUS_LED_PIN, OUTPUT);
     pinMode(CONFIG_BUTTON_PIN, INPUT_PULLUP);
@@ -346,24 +351,29 @@ void setup() {
     Serial.println("Initializing camera communication...");
     if (cameraComm.begin()) {
         Serial.println("Camera board connected!");
+        debugLog.log("Camera board detected and connected");
     } else {
         Serial.println("Camera board not detected (will retry in background)");
+        debugLog.log("Camera board not detected (optional)");
     }
 
     // Initialize authentication
     Serial.println("Initializing authentication...");
     webAuth.begin(DEFAULT_ACCESS_PIN);
     Serial.printf("Default PIN: %s (change this immediately!)\n", DEFAULT_ACCESS_PIN);
+    debugLog.logf("Authentication initialized - PIN: %s", DEFAULT_ACCESS_PIN);
 
     // Start web server
     Serial.println("Starting web interface...");
     webServer = new DiddyWebServer(driveController, &cameraComm, &webAuth);
     if (webServer->begin()) {
         Serial.printf("Web UI: http://%s\n", webServer->getIPAddress().c_str());
+        debugLog.logf("WiFi AP started: %s", webServer->getIPAddress().c_str());
     }
 
     Serial.println("\n=== System Ready ===");
     Serial.println("Waiting for input source...\n");
+    debugLog.log("=== SYSTEM READY ===");
 
     lastActivityTime = millis();
 }
@@ -411,10 +421,11 @@ void loop() {
     // Print periodic status
     printStatus();
 
-    // Safety timeout: stop motors if no input for 5 seconds
+    // Safety timeout: gracefully stop motors if no input for 5 seconds
     if (millis() - lastActivityTime > 5000 && currentMode != INPUT_MODE_NONE) {
         Serial.println("TIMEOUT: No input for 5 seconds, stopping motors");
-        driveController->stop();
+        debugLog.log("SAFETY: Input timeout - stopping motors");
+        driveController->gentleStop();
         lastActivityTime = millis();  // Reset to avoid spam
     }
 

@@ -15,7 +15,7 @@
 #define FLYSKY_PULSE_MID 1500
 #define FLYSKY_PULSE_MAX 2000
 #define FLYSKY_PULSE_DEADZONE 50
-#define FLYSKY_SIGNAL_TIMEOUT 100  // ms
+#define FLYSKY_SIGNAL_TIMEOUT 1000  // ms - increased from 100ms to prevent false disconnects
 
 class FlyskyInput {
 public:

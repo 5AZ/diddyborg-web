@@ -29,8 +29,9 @@
 #define WIFI_PASSWORD   "diddyborg123"
 
 // UART pins for communication with motor controller
-#define UART_TX         17
-#define UART_RX         18
+// Using GPIO1/GPIO3 to avoid conflict with camera data pins (D1=17, D2=18)
+#define UART_TX         1   // TX0
+#define UART_RX         3   // RX0
 #define UART_BAUD       115200
 
 // Recording settings
@@ -314,6 +315,8 @@ void recordFrame(camera_fb_t* fb) {
 // ===========================================
 
 void handleStream(AsyncWebServerRequest* request) {
+    // Simple MJPEG stream - each callback sends one complete frame
+    // This avoids concurrency issues with multiple clients
     AsyncWebServerResponse* response = request->beginChunkedResponse("multipart/x-mixed-replace;boundary=frame",
         [](uint8_t* buffer, size_t maxLen, size_t index) -> size_t {
             if (!cameraInitialized) return 0;
@@ -324,42 +327,36 @@ void handleStream(AsyncWebServerRequest* request) {
             // Record frame if recording
             recordFrame(fb);
 
-            // Build multipart HTTP response
-            static bool headerSent = false;
-            static size_t frameOffset = 0;
+            // Build complete MJPEG frame (header + data + separator)
+            String header = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
+                           String(fb->len) + "\r\n\r\n";
 
-            if (!headerSent) {
-                String header = "--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
-                               String(fb->len) + "\r\n\r\n";
+            size_t headerLen = header.length();
+            size_t totalSize = headerLen + fb->len + 2;  // +2 for \r\n separator
 
-                size_t headerLen = header.length();
-                if (headerLen <= maxLen) {
-                    memcpy(buffer, header.c_str(), headerLen);
-                    headerSent = true;
-                    frameOffset = 0;
-                    return headerLen;
-                }
-            }
-
-            // Send frame data
-            size_t remaining = fb->len - frameOffset;
-            size_t toSend = (remaining < maxLen) ? remaining : maxLen;
-
-            memcpy(buffer, fb->buf + frameOffset, toSend);
-            frameOffset += toSend;
-
-            if (frameOffset >= fb->len) {
+            // Check if frame fits in buffer
+            if (totalSize > maxLen) {
+                // Frame too large, return it and signal error
                 esp_camera_fb_return(fb);
-                headerSent = false;
-                frameOffset = 0;
-
-                // Add frame separator
-                const char* separator = "\r\n";
-                memcpy(buffer + toSend, separator, 2);
-                return toSend + 2;
+                return 0;  // Stop streaming
             }
 
-            return toSend;
+            // Copy header
+            memcpy(buffer, header.c_str(), headerLen);
+            size_t offset = headerLen;
+
+            // Copy frame data
+            memcpy(buffer + offset, fb->buf, fb->len);
+            offset += fb->len;
+
+            // Add separator
+            buffer[offset++] = '\r';
+            buffer[offset++] = '\n';
+
+            // Return frame buffer
+            esp_camera_fb_return(fb);
+
+            return offset;
         });
 
     request->send(response);

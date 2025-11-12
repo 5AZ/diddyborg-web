@@ -5,6 +5,7 @@
  */
 
 #include "CameraComm.h"
+#include "DebugLog.h"
 #include <ArduinoJson.h>
 
 CameraComm::CameraComm() {
@@ -86,8 +87,10 @@ bool CameraComm::syncPin(const char* secret, const char* pin) {
 
     if (success) {
         Serial.printf("CameraComm: PIN synced to camera: %s\n", pin);
+        debugLog.log("CAMERA: PIN synced successfully (shared secret verified)");
     } else {
         Serial.println("CameraComm: PIN sync failed (wrong secret?)");
+        debugLog.log("CAMERA: PIN sync FAILED (shared secret mismatch or camera offline)");
     }
 
     return success;
