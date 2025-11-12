@@ -71,11 +71,25 @@ void DriveController::setArcadeDrive(float throttle, float steering) {
 }
 
 void DriveController::stop() {
+    // Immediate stop (emergency) - forces motors off instantly
     _targetLeft = 0.0f;
     _targetRight = 0.0f;
     _currentLeft = 0.0f;
     _currentRight = 0.0f;
     _motorController->motorsOff();
+}
+
+void DriveController::gentleStop() {
+    // Graceful ramped stop - protects motor gears from hard stop
+    // Sets targets to zero but lets ramping system slow down gradually
+    _targetLeft = 0.0f;
+    _targetRight = 0.0f;
+
+    // If ramping is disabled, force an immediate stop
+    if (!_rampingEnabled) {
+        stop();
+    }
+    // Otherwise, update() will ramp down to zero over ~0.33 seconds
 }
 
 void DriveController::setSpeedLimit(float limit) {

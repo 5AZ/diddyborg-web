@@ -6,6 +6,7 @@
 
 #include "WebAuth.h"
 #include "Config.h"
+#include "DebugLog.h"
 
 WebAuth::WebAuth() {
     _currentPin = "";
@@ -17,6 +18,10 @@ WebAuth::WebAuth() {
 
 void WebAuth::begin(const char* defaultPin) {
     _prefs.begin("webauth", false);
+
+    // Initialize random seed for session token generation
+    // Use unconnected analog pin + microseconds for entropy
+    randomSeed(analogRead(0) ^ micros());
 
     // Load saved PIN or use default
     _currentPin = _prefs.getString("pin", defaultPin);
@@ -32,7 +37,13 @@ void WebAuth::begin(const char* defaultPin) {
 }
 
 bool WebAuth::verifyPin(const char* pin) {
-    return (_currentPin == String(pin));
+    bool valid = (_currentPin == String(pin));
+    if (valid) {
+        debugLog.log("AUTH: Login successful");
+    } else {
+        debugLog.log("AUTH: Login failed - invalid PIN");
+    }
+    return valid;
 }
 
 bool WebAuth::changePin(const char* oldPin, const char* newPin) {
@@ -68,6 +79,7 @@ bool WebAuth::changePin(const char* oldPin, const char* newPin) {
     }
 
     Serial.printf("WebAuth: PIN changed to: %s\n", _currentPin.c_str());
+    debugLog.log("AUTH: PIN changed successfully - all sessions invalidated");
     return true;
 }
 
